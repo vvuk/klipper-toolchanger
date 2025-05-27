@@ -6,6 +6,7 @@
 from . import probe
 
 try:
+    from .probe import HomingViaProbeHelper
     IS_KALICO = False
 except ImportError:
     from . import kalico_compat
@@ -26,6 +27,10 @@ class ToolProbeEndstop:
         self.gcode_macro = self.printer.load_object(config, 'gcode_macro')
         self.crash_detection_active = False
         self.crash_lasttime = 0.
+
+        if self.printer.lookup_object('probe', default=None):
+            raise self.printer.config_error('Cannot have both [probe] and [tool_probe_endstop].')
+
         self.mcu_probe = EndstopRouter(self.printer)
         if not IS_KALICO:
             self.param_helper = probe.ProbeParameterHelper(config)
@@ -33,16 +38,11 @@ class ToolProbeEndstop:
             self.probe_session = probe.ProbeSessionHelper(config, self.param_helper, self.homing_helper.start_probe_session)
             self.cmd_helper = probe.ProbeCommandHelper(config, self, self.mcu_probe.query_endstop)
         else:
+            self.param_helper = kalico_compat.ProbeParameterHelper(config)
             self.homing_helper = kalico_compat.HomingViaProbeHelper(config, self.mcu_probe)
-            self.cmd_helper = kalico_compat.ProbeCommandHelper(config, self, self.mcu_probe.query_endstop)
+            self.cmd_helper = None
 
-        # Emulate the probe object, since others rely on this. If
-        # we're using the Kalico emulated ProbeCommandHelper, it will have
-        # already registered 'probe' as a new PrinterProbe object
-        if not IS_KALICO:
-            if self.printer.lookup_object('probe', default=None):
-                raise self.printer.config_error('Cannot have both [probe] and [tool_probe_endstop].')
-            self.printer.add_object('probe', self)
+        self.printer.add_object('probe', self)
 
         self.crash_mintime = config.getfloat('crash_mintime', 0.5, above=0.)
         self.crash_gcode = self.gcode_macro.load_template(config, 'crash_gcode', '')
@@ -146,7 +146,7 @@ class ToolProbeEndstop:
             gcmd.respond_info(self._describe_tool_detection_issue(active_tools))
 
     def get_status(self, eventtime):
-        status = self.cmd_helper.get_status(eventtime)
+        status = self.cmd_helper.get_status(eventtime) if self.cmd_helper else dict()
         status['last_tools_query'] = self.last_query
         status['active_tool_number'] = self.active_tool_number
         if self.active_probe:

@@ -12,7 +12,11 @@ class ToolProbe:
         self.printer = config.get_printer()
         self.name = config.get_name()
         self.mcu_probe = probe.ProbeEndstopWrapper(config)
-        self.probe_offsets = probe.ProbeOffsetsHelper(config)
+
+        self.x_offset = config.getfloat('x_offset', 0.)
+        self.y_offset = config.getfloat('y_offset', 0.)
+        self.z_offset = config.getfloat('z_offset')
+
         self.probe_session = ProbeSessionHelper(config, self.mcu_probe)
 
         # Crash detection stuff
@@ -32,7 +36,7 @@ class ToolProbe:
     def get_probe_params(self, gcmd=None):
         return self.probe_session.get_probe_params(gcmd)
     def get_offsets(self):
-        return self.probe_offsets.get_offsets()
+        return self.x_offset, self.y_offset, self.z_offset
     def start_probe_session(self, gcmd):
         return self.probe_session.start_probe_session(gcmd)
 
