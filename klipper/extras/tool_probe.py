@@ -6,25 +6,27 @@
 import logging
 from . import probe
 
-class ToolProbe:
+class ToolProbe(probe.PrinterProbe):
     def __init__(self, config):
-        self.tool = config.getint('tool')
-        self.printer = config.get_printer()
-        self.name = config.get_name()
         self.mcu_probe = probe.ProbeEndstopWrapper(config)
+        super().__init__(config, self.mcu_probe, is_child_probe=True)
 
-        self.x_offset = config.getfloat('x_offset', 0.)
-        self.y_offset = config.getfloat('y_offset', 0.)
-        self.z_offset = config.getfloat('z_offset')
+        self.tool = config.getint('tool')
+        #self.printer = config.get_printer()
+        #self.name = config.get_name()
 
-        self.probe_session = ProbeSessionHelper(config, self.mcu_probe)
+        #self.x_offset = config.getfloat('x_offset', 0.)
+        #self.y_offset = config.getfloat('y_offset', 0.)
+        #self.z_offset = config.getfloat('z_offset')
+
+        #self.probe_session = ProbeSessionHelper(config, self.mcu_probe)
 
         # Crash detection stuff
-        pin = config.get('pin')
-        buttons = self.printer.load_object(config, 'buttons')
-        ppins = self.printer.lookup_object('pins')
-        ppins.allow_multi_use_pin(pin.replace('^', '').replace('!', ''))
-        buttons.register_buttons([pin], self._button_handler)
+        ###pin = config.get('pin')
+        ###buttons = self.printer.load_object(config, 'buttons')
+        ###ppins = self.printer.lookup_object('pins')
+        ###ppins.allow_multi_use_pin(pin.replace('^', '').replace('!', ''))
+        ###buttons.register_buttons([pin], self._button_handler)
 
         #Register with the endstop
         self.endstop = self.printer.load_object(config, "tool_probe_endstop")
@@ -33,12 +35,12 @@ class ToolProbe:
     def _button_handler(self, eventtime, is_triggered):
         self.endstop.note_probe_triggered(self, eventtime, is_triggered)
 
-    def get_probe_params(self, gcmd=None):
-        return self.probe_session.get_probe_params(gcmd)
-    def get_offsets(self):
-        return self.x_offset, self.y_offset, self.z_offset
-    def start_probe_session(self, gcmd):
-        return self.probe_session.start_probe_session(gcmd)
+    #def get_probe_params(self, gcmd=None):
+    #    return self.probe_session.get_probe_params(gcmd)
+    #def get_offsets(self):
+    #    return self.x_offset, self.y_offset, self.z_offset
+    #def start_probe_session(self, gcmd):
+    #    return self.probe_session.start_probe_session(gcmd)
 
 # Helper to track multiple probe attempts in a single command
 class ProbeSessionHelper:

@@ -3,7 +3,9 @@
 # Copyright (C) 2023 Viesturs Zarins <viesturz@gmail.com>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+import pins
 from . import probe
+from .probe import PrinterProbe
 
 try:
     from .probe import HomingViaProbeHelper
@@ -18,6 +20,7 @@ except ImportError:
 class ToolProbeEndstop:
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.mcu_probe = EndstopRouter(self.printer)
         self.reactor = self.printer.get_reactor()
         self.name = config.get_name()
         self.tool_probes = {}
@@ -31,18 +34,16 @@ class ToolProbeEndstop:
         if self.printer.lookup_object('probe', default=None):
             raise self.printer.config_error('Cannot have both [probe] and [tool_probe_endstop].')
 
-        self.mcu_probe = EndstopRouter(self.printer)
         if not IS_KALICO:
             self.param_helper = probe.ProbeParameterHelper(config)
             self.homing_helper = probe.HomingViaProbeHelper(config, self.mcu_probe, self.param_helper)
             self.probe_session = probe.ProbeSessionHelper(config, self.param_helper, self.homing_helper.start_probe_session)
             self.cmd_helper = probe.ProbeCommandHelper(config, self, self.mcu_probe.query_endstop)
         else:
-            self.param_helper = kalico_compat.ProbeParameterHelper(config)
-            self.homing_helper = kalico_compat.HomingViaProbeHelper(config, self.mcu_probe)
             self.cmd_helper = None
 
         self.printer.add_object('probe', self)
+        self.printer.lookup_object("pins").register_chip("probe", self)
 
         self.crash_mintime = config.getfloat('crash_mintime', 0.5, above=0.)
         self.crash_gcode = self.gcode_macro.load_template(config, 'crash_gcode', '')
@@ -59,9 +60,107 @@ class ToolProbeEndstop:
         self.gcode.register_command('STOP_TOOL_PROBE_CRASH_DETECTION', self.cmd_STOP_TOOL_PROBE_CRASH_DETECTION,
                                     desc=self.cmd_STOP_TOOL_PROBE_CRASH_DETECTION_help)
 
+        self.printer.register_event_handler(
+            "homing:homing_move_begin", self._handle_homing_move_begin
+        )
+        self.printer.register_event_handler(
+            "homing:homing_move_end", self._handle_homing_move_end
+        )
+        self.printer.register_event_handler(
+            "homing:home_rails_begin", self._handle_home_rails_begin
+        )
+        self.printer.register_event_handler(
+            "homing:home_rails_end", self._handle_home_rails_end
+        )
+        self.printer.register_event_handler(
+            "gcode:command_error", self._handle_command_error
+        )
+        # Register PROBE/QUERY_PROBE commands
+        self.gcode = self.printer.lookup_object("gcode")
+        self.gcode.register_command(
+            "PROBE", self.cmd_PROBE, desc=PrinterProbe.cmd_PROBE_help
+        )
+        self.gcode.register_command(
+            "QUERY_PROBE", self.cmd_QUERY_PROBE, desc=PrinterProbe.cmd_QUERY_PROBE_help
+        )
+        self.gcode.register_command(
+            "PROBE_CALIBRATE",
+            self.cmd_PROBE_CALIBRATE,
+            desc=PrinterProbe.cmd_PROBE_CALIBRATE_help,
+        )
+        self.gcode.register_command(
+            "PROBE_ACCURACY",
+            self.cmd_PROBE_ACCURACY,
+            desc=PrinterProbe.cmd_PROBE_ACCURACY_help,
+        )
+        self.gcode.register_command(
+            "Z_OFFSET_APPLY_PROBE",
+            self.cmd_Z_OFFSET_APPLY_PROBE,
+            desc=PrinterProbe.cmd_Z_OFFSET_APPLY_PROBE_help,
+        )
+
+    def cmd_PROBE(self, gcmd):
+        if self.active_probe:
+            self.active_probe.cmd_PROBE(gcmd)
+
+    def cmd_QUERY_PROBE(self, gcmd):
+        if self.active_probe:
+            self.active_probe.cmd_QUERY_PROBE(gcmd)
+
+    def cmd_PROBE_CALIBRATE(self, gcmd):
+        if self.active_probe:
+            self.active_probe.cmd_PROBE_CALIBRATE(gcmd)
+
+    def cmd_PROBE_ACCURACY(self, gcmd):
+        if self.active_probe:
+            self.active_probe.cmd_PROBE_ACCURACY(gcmd)
+
+    def cmd_Z_OFFSET_APPLY_PROBE(self, gcmd):
+        if self.active_probe:
+            self.active_probe.cmd_Z_OFFSET_APPLY_PROBE(gcmd)
+
+    def _handle_homing_move_begin(self, hmove):
+        if self.active_probe:
+            self.active_probe._handle_homing_move_begin(hmove)
+
+    def _handle_homing_move_end(self, hmove):
+        if self.active_probe:
+            self.active_probe._handle_homing_move_end(hmove)
+
+    def _handle_home_rails_begin(self, homing_state, rails):
+        if self.active_probe:
+            self.active_probe._handle_home_rails_begin(homing_state, rails)
+
+    def _handle_home_rails_end(self, homing_state, rails):
+        if self.active_probe:
+            self.active_probe._handle_home_rails_end(homing_state, rails)
+
+    def _handle_command_error(self):
+        if self.active_probe:
+            self.active_probe._handle_command_error()
+
     def _handle_connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         self._detect_active_tool()
+
+    def multi_probe_begin(self, always_restore_toolhead=False):
+        if self.active_probe:
+            self.active_probe.multi_probe_begin(always_restore_toolhead)
+        else:
+            raise self.printer.command_error("No active probe")
+
+    def multi_probe_end(self):
+        if self.active_probe:
+            self.active_probe.multi_probe_end()
+        else:
+            raise self.printer.command_error("No active probe")
+
+    def setup_pin(self, pin_type, pin_params):
+        if pin_type != "endstop" or pin_params["pin"] != "z_virtual_endstop":
+            raise pins.error("Probe virtual endstop only useful as endstop pin")
+        if pin_params["invert"] or pin_params["pullup"]:
+            raise pins.error("Can not pullup/invert probe virtual endstop")
+        return self.mcu_probe
 
     def get_offsets(self):
         if self.active_probe:
@@ -146,7 +245,7 @@ class ToolProbeEndstop:
             gcmd.respond_info(self._describe_tool_detection_issue(active_tools))
 
     def get_status(self, eventtime):
-        status = self.cmd_helper.get_status(eventtime) if self.cmd_helper else dict()
+        status = self.active_probe.get_status(eventtime) if self.active_probe else dict()
         status['last_tools_query'] = self.last_query
         status['active_tool_number'] = self.active_tool_number
         if self.active_probe:
