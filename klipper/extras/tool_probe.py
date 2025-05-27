@@ -6,6 +6,12 @@
 import logging
 from . import probe
 
+try:
+    from klippy import printer
+    IS_KALICO = True
+except ImportError:
+    IS_KALICO = False
+
 class ToolProbe:
     def __init__(self, config):
         self.tool = config.getint('tool')
@@ -170,5 +176,33 @@ class ProbeSessionHelper:
         self.results = []
         return res
 
+# The Kalico version of this is a full PrinterProbe,
+# minus registering the gcode commands and pin. That's
+# done in tool_probe_endstop which calls the appropriate
+# method.
+class KalicoToolProbe(probe.PrinterProbe):
+    def __init__(self, config):
+        self.mcu_probe = probe.ProbeEndstopWrapper(config)
+        super().__init__(config, self.mcu_probe, is_child_probe=True)
+        self.tool = config.getint('tool')
+
+        # Crash detection stuff
+        pin = config.get('pin')
+        buttons = self.printer.load_object(config, 'buttons')
+        ppins = self.printer.lookup_object('pins')
+        ppins.allow_multi_use_pin(pin.replace('^', '').replace('!', ''))
+        buttons.register_buttons([pin], self._button_handler)
+
+        #Register with the endstop
+        self.endstop = self.printer.load_object(config, "tool_probe_endstop")
+        self.endstop.add_probe(config, self)
+
+    def _button_handler(self, eventtime, is_triggered):
+        self.endstop.note_probe_triggered(self, eventtime, is_triggered)
+
 def load_config_prefix(config):
-    return ToolProbe(config)
+    if IS_KALICO:
+        return KalicoToolProbe(config)
+    else:
+        return ToolProbe(config)
+
