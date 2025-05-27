@@ -5,6 +5,12 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 from . import probe
 
+try:
+    IS_KALICO = False
+except ImportError:
+    from . import kalico_compat
+    IS_KALICO = True
+
 # Virtual endstop, using a tool attached Z probe in a toolchanger setup.
 # Tool endstop change may be done either via SET_ACTIVE_TOOL_PROBE TOOL=99
 # Or via auto-detection of single open tool probe via DETECT_ACTIVE_TOOL_PROBE
@@ -21,15 +27,22 @@ class ToolProbeEndstop:
         self.crash_detection_active = False
         self.crash_lasttime = 0.
         self.mcu_probe = EndstopRouter(self.printer)
-        self.param_helper = probe.ProbeParameterHelper(config)
-        self.homing_helper = probe.HomingViaProbeHelper(config, self.mcu_probe, self.param_helper)
-        self.probe_session = probe.ProbeSessionHelper(config, self.param_helper, self.homing_helper.start_probe_session)
-        self.cmd_helper = probe.ProbeCommandHelper(config, self, self.mcu_probe.query_endstop)
+        if not IS_KALICO:
+            self.param_helper = probe.ProbeParameterHelper(config)
+            self.homing_helper = probe.HomingViaProbeHelper(config, self.mcu_probe, self.param_helper)
+            self.probe_session = probe.ProbeSessionHelper(config, self.param_helper, self.homing_helper.start_probe_session)
+            self.cmd_helper = probe.ProbeCommandHelper(config, self, self.mcu_probe.query_endstop)
+        else:
+            self.homing_helper = kalico_compat.HomingViaProbeHelper(config, self.mcu_probe)
+            self.cmd_helper = kalico_compat.ProbeCommandHelper(config, self, self.mcu_probe.query_endstop)
 
-        # Emulate the probe object, since others rely on this.
-        if self.printer.lookup_object('probe', default=None):
-            raise self.printer.config_error('Cannot have both [probe] and [tool_probe_endstop].')
-        self.printer.add_object('probe', self)
+        # Emulate the probe object, since others rely on this. If
+        # we're using the Kalico emulated ProbeCommandHelper, it will have
+        # already registered 'probe' as a new PrinterProbe object
+        if not IS_KALICO:
+            if self.printer.lookup_object('probe', default=None):
+                raise self.printer.config_error('Cannot have both [probe] and [tool_probe_endstop].')
+            self.printer.add_object('probe', self)
 
         self.crash_mintime = config.getfloat('crash_mintime', 0.5, above=0.)
         self.crash_gcode = self.gcode_macro.load_template(config, 'crash_gcode', '')
