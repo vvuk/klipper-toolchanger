@@ -183,6 +183,7 @@ class ProbeSessionHelper:
 class KalicoToolProbe(probe.PrinterProbe):
     def __init__(self, config):
         self.mcu_probe = probe.ProbeEndstopWrapper(config)
+        logging.info(f"KalicoToolProbe: mcu_probe z offset: {self.mcu_probe.get_position_endstop()}")
         super().__init__(config, self.mcu_probe, is_child_probe=True)
         self.tool = config.getint('tool')
 

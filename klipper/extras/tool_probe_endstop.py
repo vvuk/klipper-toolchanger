@@ -4,15 +4,12 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import pins
+import logging
+import traceback
 from . import probe
 from .probe import PrinterProbe
 
-try:
-    from .probe import HomingViaProbeHelper
-    IS_KALICO = False
-except ImportError:
-    from . import kalico_compat
-    IS_KALICO = True
+IS_KALICO = not hasattr(probe, 'HomingViaProbeHelper')
 
 # Virtual endstop, using a tool attached Z probe in a toolchanger setup.
 # Tool endstop change may be done either via SET_ACTIVE_TOOL_PROBE TOOL=99
@@ -49,7 +46,7 @@ class ToolProbeEndstop:
         self.crash_gcode = self.gcode_macro.load_template(config, 'crash_gcode', '')
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
-        # Register PROBE/QUERY_PROBE commands
+
         self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command('SET_ACTIVE_TOOL_PROBE', self.cmd_SET_ACTIVE_TOOL_PROBE,
                                     desc=self.cmd_SET_ACTIVE_TOOL_PROBE_help)
@@ -60,6 +57,9 @@ class ToolProbeEndstop:
         self.gcode.register_command('STOP_TOOL_PROBE_CRASH_DETECTION', self.cmd_STOP_TOOL_PROBE_CRASH_DETECTION,
                                     desc=self.cmd_STOP_TOOL_PROBE_CRASH_DETECTION_help)
 
+        #
+        # These are all forwarded to the active probe
+        #
         self.printer.register_event_handler(
             "homing:homing_move_begin", self._handle_homing_move_begin
         )
@@ -75,8 +75,6 @@ class ToolProbeEndstop:
         self.printer.register_event_handler(
             "gcode:command_error", self._handle_command_error
         )
-        # Register PROBE/QUERY_PROBE commands
-        self.gcode = self.printer.lookup_object("gcode")
         self.gcode.register_command(
             "PROBE", self.cmd_PROBE, desc=PrinterProbe.cmd_PROBE_help
         )
@@ -99,25 +97,37 @@ class ToolProbeEndstop:
             desc=PrinterProbe.cmd_Z_OFFSET_APPLY_PROBE_help,
         )
 
+    def _require_active_probe(self):
+        if not self.active_probe:
+            raise self.printer.command_error("No active tool probe!")
+
+    def get_lift_speed(self, gcmd=None):
+        self._require_active_probe()
+        return self.active_probe.get_lift_speed(gcmd)
+
+    def run_probe(self, gcmd):
+        self._require_active_probe()
+        return self.active_probe.run_probe(gcmd)
+
     def cmd_PROBE(self, gcmd):
-        if self.active_probe:
-            self.active_probe.cmd_PROBE(gcmd)
+        self._require_active_probe()
+        self.active_probe.cmd_PROBE(gcmd)
 
     def cmd_QUERY_PROBE(self, gcmd):
-        if self.active_probe:
-            self.active_probe.cmd_QUERY_PROBE(gcmd)
+        self._require_active_probe()
+        self.active_probe.cmd_QUERY_PROBE(gcmd)
 
     def cmd_PROBE_CALIBRATE(self, gcmd):
-        if self.active_probe:
-            self.active_probe.cmd_PROBE_CALIBRATE(gcmd)
+        self._require_active_probe()
+        self.active_probe.cmd_PROBE_CALIBRATE(gcmd)
 
     def cmd_PROBE_ACCURACY(self, gcmd):
-        if self.active_probe:
-            self.active_probe.cmd_PROBE_ACCURACY(gcmd)
+        self._require_active_probe()
+        self.active_probe.cmd_PROBE_ACCURACY(gcmd)
 
     def cmd_Z_OFFSET_APPLY_PROBE(self, gcmd):
-        if self.active_probe:
-            self.active_probe.cmd_Z_OFFSET_APPLY_PROBE(gcmd)
+        self._require_active_probe()
+        self.active_probe.cmd_Z_OFFSET_APPLY_PROBE(gcmd)
 
     def _handle_homing_move_begin(self, hmove):
         if self.active_probe:
@@ -144,16 +154,12 @@ class ToolProbeEndstop:
         self._detect_active_tool()
 
     def multi_probe_begin(self, always_restore_toolhead=False):
-        if self.active_probe:
-            self.active_probe.multi_probe_begin(always_restore_toolhead)
-        else:
-            raise self.printer.command_error("No active probe")
+        self._require_active_probe()
+        self.active_probe.multi_probe_begin(always_restore_toolhead)
 
     def multi_probe_end(self):
-        if self.active_probe:
-            self.active_probe.multi_probe_end()
-        else:
-            raise self.printer.command_error("No active probe")
+        self._require_active_probe()
+        self.active_probe.multi_probe_end()
 
     def setup_pin(self, pin_type, pin_params):
         if pin_type != "endstop" or pin_params["pin"] != "z_virtual_endstop":
@@ -168,14 +174,12 @@ class ToolProbeEndstop:
         return 0.0, 0.0, 0.0
     
     def get_probe_params(self, gcmd=None):
-        if self.active_probe:
-            return self.active_probe.get_probe_params(gcmd)
-        raise self.printer.command_error("No active tool probe")
+        self._require_active_probe()
+        return self.active_probe.get_probe_params(gcmd)
     
     def start_probe_session(self, gcmd):
-        if self.active_probe:
-            return self.active_probe.start_probe_session(gcmd)
-        raise self.printer.command_error("No active tool probe")
+        self._require_active_probe()
+        return self.active_probe.start_probe_session(gcmd)
 
     def add_probe(self, config, tool_probe):
         if (tool_probe.tool in self.tool_probes):
@@ -349,7 +353,11 @@ class EndstopRouter:
         if not self.active_mcu:
             # This will get picked up by the endstop, and is static
             # Report 0 and fix up in the homing sequence
+            for s in traceback.format_stack():
+                logging.info(s)
+            logging.info("EndstopRouter: returning 0.0!")
             return 0.0
+        logging.info(f"EndstopRouter: returning {self.active_mcu.get_position_endstop()}")
         return self.active_mcu.get_position_endstop()
 
 def load_config(config):

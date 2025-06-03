@@ -5,6 +5,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import ast, bisect
+import logging
 from unittest.mock import sentinel
 
 STATUS_UNINITALIZED = 'uninitialized'
@@ -175,7 +176,7 @@ class Toolchanger:
     def cmd_SELECT_TOOL(self, gcmd):
         tool_name = gcmd.get('TOOL', None)
         if tool_name:
-            tool = self.printer.lookup_object(tool_name)
+            tool = self.printer.lookup_object(tool_name, None)
             if not tool:
                 raise gcmd.error("Select tool: TOOL=%s not found" % (tool_name))
             restore_axis = gcmd.get('RESTORE_AXIS', tool.t_command_restore_axis)
@@ -299,6 +300,12 @@ class Toolchanger:
         self.next_change_id += 1
         self.current_change_id = this_change_id
 
+        # allow overriding what the toolchanger thinks is the active tool's
+        # Z gcode offset, if the offset changed while the tool was selected
+        # and we don't want to "unapply" the wrong amount.
+        tool_z_offset = self.active_tool.gcode_z_offset if self.active_tool else 0.0
+        tool_z_offset = gcmd.get_float("ASSUME_ACTIVE_TOOL_Z_OFFSET", tool_z_offset)
+
         try:
             self.ensure_homed(gcmd)
             self.status = STATUS_CHANGING
@@ -316,7 +323,10 @@ class Toolchanger:
             gcode_status = self.gcode_move.get_status()
             gcode_position = gcode_status['gcode_position']
             current_z_offset = gcode_status['homing_origin'][2] # Current Z offset applied; Contains both the tool offset plus any manual changes by the user.
-            extra_z_offset = current_z_offset - (self.active_tool.gcode_z_offset if self.active_tool else 0.0)
+            extra_z_offset = current_z_offset - tool_z_offset
+
+            if self.active_tool:
+                logging.info(f"TOOL active: {self.active_tool.name} current_z_offset: {current_z_offset:.3f} tool_z_offset: {tool_z_offset:.3f} extra_z_offset: {extra_z_offset:.3f}")
 
             self.last_change_gcode_position = gcode_position
             self.last_change_start_position = self._position_to_xyz(gcode_position, 'xyz')
